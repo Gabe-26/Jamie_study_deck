@@ -296,6 +296,35 @@
   .stat-again{background:var(--danger-pale);color:var(--danger);}
   .flash-summary .actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;}
 
+  /* ---------- Practice test ---------- */
+  .test-generator{
+    margin:6px 0 22px;padding:16px 18px;
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--paper-raise);
+  }
+  .test-generator-label{display:block;font-size:14px;color:var(--ink-soft);margin-bottom:10px;}
+  .difficulty-row{display:flex;gap:10px;}
+  .difficulty-row .btn{flex:1;min-width:0;}
+
+  .test-intro{color:var(--ink-soft);font-size:14px;margin:0 0 20px;}
+  .test-question{margin-bottom:26px;max-width:640px;}
+  .test-q-text{font-family:var(--serif);font-size:16.5px;font-weight:500;margin:0 0 12px;line-height:1.5;}
+  .test-options{display:flex;flex-direction:column;gap:8px;}
+  .test-option{
+    text-align:left;padding:12px 16px;border-radius:10px;border:1px solid var(--line);
+    background:var(--white);font-size:15px;cursor:pointer;color:var(--ink);
+    min-height:44px;
+  }
+  .test-option.selected{border-color:var(--teal);background:var(--teal-pale);}
+  .test-option.correct{border-color:var(--teal);background:var(--teal-pale);color:var(--teal-deep);}
+  .test-option.incorrect{border-color:var(--danger);background:var(--danger-pale);color:var(--danger);}
+  .test-option:disabled{cursor:default;}
+  .test-explanation{margin-top:10px;font-size:14px;color:var(--ink-soft);line-height:1.6;max-width:640px;}
+  .test-validation{font-size:13px;color:var(--danger);margin-bottom:12px;min-height:16px;}
+  .test-score{text-align:center;padding:10px 0 30px;}
+  .test-score h3{font-family:var(--serif);font-size:36px;margin:0 0 6px;color:var(--teal-deep);}
+  .test-score p{color:var(--ink-soft);margin:0;}
+
   /* ---------- Loading / error ---------- */
   .loading-overlay{
     position:fixed;inset:0;background:rgba(33,38,31,0.35);
@@ -350,7 +379,7 @@
   .library-list{padding-bottom:10px;}
   .library-empty{color:var(--ink-soft);font-size:14px;padding:20px 0;}
   .deck-item{
-    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    display:flex;align-items:center;justify-content:space-between;gap:6px;
     padding:14px 0;border-bottom:1px solid var(--line);
   }
   .deck-item-main{flex:1;cursor:pointer;min-width:0;}
@@ -425,13 +454,24 @@
         <button id="genFlashBtn" class="btn btn-primary">Create flashcards</button>
       </div>
 
+      <div class="test-generator">
+        <span class="test-generator-label">Create a practice test</span>
+        <div class="difficulty-row">
+          <button class="btn btn-ghost difficulty-btn" data-difficulty="easy">Easy</button>
+          <button class="btn btn-ghost difficulty-btn" data-difficulty="medium">Medium</button>
+          <button class="btn btn-ghost difficulty-btn" data-difficulty="hard">Hard</button>
+        </div>
+      </div>
+
       <nav id="tabs" class="tabs" hidden>
         <button class="tab" data-tab="review">Review sheet</button>
         <button class="tab" data-tab="flashcards">Flashcards</button>
+        <button class="tab" data-tab="test">Practice test</button>
       </nav>
 
       <div id="reviewPanel" class="panel" hidden></div>
       <div id="flashcardsPanel" class="panel" hidden></div>
+      <div id="testPanel" class="panel" hidden></div>
     </section>
   </main>
 </div>
@@ -500,6 +540,7 @@
     tabs: document.getElementById('tabs'),
     reviewPanel: document.getElementById('reviewPanel'),
     flashcardsPanel: document.getElementById('flashcardsPanel'),
+    testPanel: document.getElementById('testPanel'),
     loadingOverlay: document.getElementById('loadingOverlay'),
     loadingText: document.getElementById('loadingText'),
     errorBanner: document.getElementById('errorBanner'),
@@ -521,6 +562,7 @@
   var currentDeck = null;
   var activeTab = 'review';
   var flashState = null;
+  var testState = null;
 
   // ---------- Storage helpers (localStorage-backed, so this runs standalone) ----------
   function safeGet(key){
@@ -533,9 +575,8 @@
   }
   function safeSet(key, value){
     return new Promise(function(resolve){
-      try { localStorage.setItem(key, JSON.stringify(value)); }
-      catch(e){ console.error('storage set failed', e); }
-      resolve();
+      try { localStorage.setItem(key, JSON.stringify(value)); resolve(true); }
+      catch(e){ console.error('storage set failed', e); resolve(false); }
     });
   }
   function safeDelete(key){
@@ -557,11 +598,22 @@
   function saveDeckIndex(idx){ return safeSet(STORAGE_INDEX_KEY, idx); }
 
   function saveDeck(deck){
-    return safeSet('deck:' + deck.id, deck).then(function(){
+    function updateIndex(fileSaved){
       return loadDeckIndex().then(function(idx){
         var filtered = idx.filter(function(d){ return d.id !== deck.id; });
-        filtered.unshift({ id: deck.id, title: deck.title, fileName: deck.fileName, createdAt: deck.createdAt });
+        filtered.unshift({ id: deck.id, title: deck.title, fileName: deck.fileName, createdAt: deck.createdAt, hasFile: fileSaved });
         return saveDeckIndex(filtered);
+      });
+    }
+    return safeSet('deck:' + deck.id, deck).then(function(ok){
+      if (ok) return updateIndex(!!deck.fileDataUrl).then(function(){ return { fileSaved: !!deck.fileDataUrl }; });
+      if (!deck.fileDataUrl) return updateIndex(false).then(function(){ return { fileSaved: false }; });
+      // Storage was full with the file included — retry without it so the study materials aren't lost.
+      var stripped = {};
+      for (var k in deck){ if (deck.hasOwnProperty(k)) stripped[k] = deck[k]; }
+      stripped.fileDataUrl = null;
+      return safeSet('deck:' + deck.id, stripped).then(function(){
+        return updateIndex(false).then(function(){ return { fileSaved: false, fileDropped: true }; });
       });
     });
   }
@@ -738,6 +790,27 @@
   }
 
   // ---------- File handling ----------
+  function readFileAsDataUrl(file){
+    return new Promise(function(resolve){
+      var reader = new FileReader();
+      reader.onload = function(){ resolve(reader.result); };
+      reader.onerror = function(){ resolve(null); };
+      reader.readAsDataURL(file);
+    });
+  }
+  function openOrDownloadFile(dataUrl, fileName){
+    if (dataUrl.indexOf('data:application/pdf') === 0){
+      window.open(dataUrl, '_blank');
+    } else {
+      var a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }
+
   function handleFile(file){
     if (!file) return;
     var name = file.name || 'upload';
@@ -751,8 +824,11 @@
 
     showLoading('Reading ' + name + '…');
     var extractPromise = isPdf ? extractPdfText(file) : extractPptxText(file);
+    var dataUrlPromise = readFileAsDataUrl(file);
 
-    extractPromise.then(function(result){
+    Promise.all([extractPromise, dataUrlPromise]).then(function(results){
+      var result = results[0];
+      var fileDataUrl = results[1];
       hideLoading();
       if (!result.text || result.text.replace(/---.*?---/g, '').trim().length < 20){
         showError("Couldn't find readable text in that file. If it's a scanned document, this won't pick up the content — try exporting it with selectable text.");
@@ -774,10 +850,16 @@
         unitCount: result.unitCount,
         unitLabel: result.unitLabel,
         truncated: truncated,
+        fileDataUrl: fileDataUrl || null,
         reviewSheet: null,
-        flashcards: null
+        flashcards: null,
+        test: null
       };
-      saveDeck(currentDeck);
+      saveDeck(currentDeck).then(function(saveResult){
+        if (saveResult.fileDropped){
+          showError("Saved your study materials, but the original file was too large to keep for later.");
+        }
+      });
       openWorkspace();
       if (truncated){
         showError("This file is long, so only the first part was used for analysis. Results may not cover everything.");
@@ -817,14 +899,18 @@
   function openWorkspace(){
     el.uploadScreen.hidden = true;
     el.workspaceScreen.hidden = false;
+    flashState = null;
+    testState = null;
     renderWorkspaceHeader();
-    el.tabs.hidden = !(currentDeck.reviewSheet || currentDeck.flashcards);
-    if (currentDeck.reviewSheet || currentDeck.flashcards){
-      activeTab = currentDeck.reviewSheet ? 'review' : 'flashcards';
+    var hasAny = currentDeck.reviewSheet || currentDeck.flashcards || currentDeck.test;
+    el.tabs.hidden = !hasAny;
+    if (hasAny){
+      activeTab = currentDeck.reviewSheet ? 'review' : (currentDeck.flashcards ? 'flashcards' : 'test');
       renderTabs();
     } else {
       el.reviewPanel.hidden = true;
       el.flashcardsPanel.hidden = true;
+      el.testPanel.hidden = true;
     }
   }
 
@@ -914,6 +1000,116 @@
       }
     });
   });
+
+  // ---------- Generate: Practice test ----------
+  var TEST_DIFFICULTY_GUIDANCE = {
+    easy: 'Keep questions at the level of straightforward recall: definitions, basic facts, and simple identification, in plain and direct wording.',
+    medium: 'Write questions that require applying a concept or connecting two related ideas, not just recalling a definition.',
+    hard: 'Write challenging questions that require multi-step reasoning, distinguishing between similar or easily confused concepts, or applying the material to a new practical or clinical scenario.'
+  };
+  function testSystemPrompt(difficulty){
+    return "You are an expert study coach creating a practice test. Analyze the lecture content the user gives you and write a " + difficulty + " practice test. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape: {\"questions\": [{\"question\": string, \"options\": [string, string, string, string], \"correctIndex\": number, \"explanation\": string}, ...]}. Write 10 to 15 multiple-choice questions, each with exactly 4 options and exactly one correct answer (correctIndex is 0-based). " + TEST_DIFFICULTY_GUIDANCE[difficulty];
+  }
+
+  function generateTest(difficulty){
+    if (!currentDeck) return;
+    showLoading('Writing your ' + difficulty + ' practice test…');
+    callClaude(testSystemPrompt(difficulty), currentDeck.extractedText).then(function(raw){
+      var parsed = parseJsonLoose(raw);
+      if (!parsed || !Array.isArray(parsed.questions) || !parsed.questions.length) throw new Error('bad shape');
+      currentDeck.test = { difficulty: difficulty, questions: parsed.questions };
+      hideLoading();
+      saveDeck(currentDeck);
+      testState = null;
+      el.tabs.hidden = false;
+      activeTab = 'test';
+      renderTabs();
+    })['catch'](function(err){
+      hideLoading();
+      console.error(err);
+      if (err && err.message === 'NO_API_KEY'){
+        showError('Add your Anthropic API key first.');
+        openSettings();
+      } else {
+        showError("The practice test didn't come back as expected. Try again.");
+      }
+    });
+  }
+
+  document.querySelectorAll('.difficulty-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      generateTest(btn.getAttribute('data-difficulty'));
+    });
+  });
+
+  function renderTest(){
+    if (!currentDeck.test){ el.testPanel.innerHTML = ''; return; }
+    if (!testState) testState = { answers: {}, submitted: false };
+    var test = currentDeck.test;
+    var difficultyLabel = test.difficulty.charAt(0).toUpperCase() + test.difficulty.slice(1);
+    var html = '';
+
+    if (testState.submitted){
+      var correct = 0;
+      test.questions.forEach(function(q, i){ if (testState.answers[i] === q.correctIndex) correct++; });
+      html += '<div class="test-score"><h3>' + correct + ' / ' + test.questions.length + '</h3>' +
+        '<p>' + difficultyLabel + ' practice test</p></div>';
+    } else {
+      html += '<p class="test-intro">' + difficultyLabel + ' practice test &middot; ' + test.questions.length + ' questions</p>';
+    }
+
+    test.questions.forEach(function(q, qi){
+      html += '<div class="test-question"><p class="test-q-text">' + (qi + 1) + '. ' + escapeHtml(q.question) + '</p><div class="test-options">';
+      q.options.forEach(function(opt, oi){
+        var cls = 'test-option';
+        if (testState.submitted){
+          if (oi === q.correctIndex) cls += ' correct';
+          else if (testState.answers[qi] === oi) cls += ' incorrect';
+        } else if (testState.answers[qi] === oi){
+          cls += ' selected';
+        }
+        html += '<button class="' + cls + '" data-q="' + qi + '" data-o="' + oi + '"' + (testState.submitted ? ' disabled' : '') + '>' + escapeHtml(opt) + '</button>';
+      });
+      html += '</div>';
+      if (testState.submitted){
+        html += '<p class="test-explanation">' + escapeHtml(q.explanation) + '</p>';
+      }
+      html += '</div>';
+    });
+
+    if (!testState.submitted){
+      html += '<p id="testValidation" class="test-validation"></p><button id="submitTestBtn" class="btn btn-primary">Submit test</button>';
+    } else {
+      html += '<button id="retakeTestBtn" class="btn btn-ghost">Retake test</button>';
+    }
+
+    el.testPanel.innerHTML = html;
+
+    if (!testState.submitted){
+      el.testPanel.querySelectorAll('.test-option').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var qi = parseInt(btn.getAttribute('data-q'), 10);
+          var oi = parseInt(btn.getAttribute('data-o'), 10);
+          testState.answers[qi] = oi;
+          renderTest();
+        });
+      });
+      document.getElementById('submitTestBtn').addEventListener('click', function(){
+        var unanswered = test.questions.length - Object.keys(testState.answers).length;
+        if (unanswered > 0){
+          document.getElementById('testValidation').textContent = 'Answer all questions before submitting (' + unanswered + ' left).';
+          return;
+        }
+        testState.submitted = true;
+        renderTest();
+      });
+    } else {
+      document.getElementById('retakeTestBtn').addEventListener('click', function(){
+        testState = { answers: {}, submitted: false };
+        renderTest();
+      });
+    }
+  }
 
   function initFlashState(){
     var cards = currentDeck.flashcards;
@@ -1078,8 +1274,10 @@
     });
     el.reviewPanel.hidden = activeTab !== 'review';
     el.flashcardsPanel.hidden = activeTab !== 'flashcards';
+    el.testPanel.hidden = activeTab !== 'test';
     if (activeTab === 'review') renderReviewSheet();
     if (activeTab === 'flashcards'){ flashState = null; renderFlashcards(); }
+    if (activeTab === 'test'){ testState = null; renderTest(); }
   }
   el.tabs.addEventListener('click', function(e){
     var btn = e.target.closest('.tab');
@@ -1101,6 +1299,7 @@
         html += '<div class="deck-item" data-id="' + d.id + '">' +
           '<div class="deck-item-main" data-open="' + d.id + '"><strong>' + escapeHtml(d.title) + '</strong>' +
           '<span>' + escapeHtml(d.fileName) + ' · ' + relativeDate(d.createdAt) + '</span></div>' +
+          (d.hasFile ? '<button class="btn-text" data-viewfile="' + d.id + '">Original file</button>' : '') +
           '<button class="btn-danger-text" data-delete="' + d.id + '">Delete</button>' +
           '</div>';
       });
@@ -1115,6 +1314,15 @@
   el.libraryList.addEventListener('click', function(e){
     var openTarget = e.target.closest('[data-open]');
     var delTarget = e.target.closest('[data-delete]');
+    var viewTarget = e.target.closest('[data-viewfile]');
+    if (viewTarget){
+      var vid = viewTarget.getAttribute('data-viewfile');
+      safeGet('deck:' + vid).then(function(deck){
+        if (!deck || !deck.fileDataUrl){ showError("That file isn't available anymore."); return; }
+        openOrDownloadFile(deck.fileDataUrl, deck.fileName);
+      });
+      return;
+    }
     if (delTarget){
       var id = delTarget.getAttribute('data-delete');
       deleteDeck(id).then(openLibrary);
