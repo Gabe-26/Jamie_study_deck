@@ -951,17 +951,19 @@
       reader.readAsDataURL(file);
     });
   }
-  function openOrDownloadFile(dataUrl, fileName){
-    if (dataUrl.indexOf('data:application/pdf') === 0){
-      window.open(dataUrl, '_blank');
-    } else {
-      var a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+  function openOrDownloadFile(dataUrl, fileName, preOpenedWindow){
+    var isPdf = dataUrl.indexOf('data:application/pdf') === 0;
+    if (isPdf && preOpenedWindow && !preOpenedWindow.closed){
+      preOpenedWindow.location.href = dataUrl;
+      return;
     }
+    if (preOpenedWindow && !preOpenedWindow.closed) preOpenedWindow.close();
+    var a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function handleFile(file){
@@ -1596,9 +1598,17 @@
     var viewTarget = e.target.closest('[data-viewfile]');
     if (viewTarget){
       var vid = viewTarget.getAttribute('data-viewfile');
+      // Open the tab synchronously, right in the click handler, so the browser still
+      // counts it as user-initiated. IndexedDB reads are async, so window.open() called
+      // after the .then() below would arrive too late and get treated as a pop-up.
+      var preOpened = window.open('', '_blank');
       safeGet('deck:' + vid).then(function(deck){
-        if (!deck || !deck.fileDataUrl){ showError("That file isn't available anymore."); return; }
-        openOrDownloadFile(deck.fileDataUrl, deck.fileName);
+        if (!deck || !deck.fileDataUrl){
+          if (preOpened && !preOpened.closed) preOpened.close();
+          showError("That file isn't available anymore.");
+          return;
+        }
+        openOrDownloadFile(deck.fileDataUrl, deck.fileName, preOpened);
       });
       return;
     }
