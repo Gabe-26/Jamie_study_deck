@@ -569,25 +569,112 @@
   var flashState = null;
   var testState = null;
 
-  // ---------- Storage helpers (localStorage-backed, so this runs standalone) ----------
-  function safeGet(key){
-    return new Promise(function(resolve){
-      try {
-        var raw = localStorage.getItem(key);
-        resolve(raw ? JSON.parse(raw) : null);
-      } catch(e){ resolve(null); }
+  // ---------- Storage engine: IndexedDB-backed generic key/value store ----------
+  // Swapped from localStorage (capped around 5-10MB) to IndexedDB, which gets a much
+  // larger allowance (roughly 60% of disk on an iPad Home Screen web app, similar on
+  // desktop Safari/Chrome/Edge). safeGet/safeSet/safeDelete keep the exact same
+  // signatures and resolve/reject behavior as before, so nothing else in the app
+  // needed to change.
+  var DB_NAME = 'studydeck-db';
+  var DB_VERSION = 1;
+  var STORE_NAME = 'kv';
+  var dbPromise = null;
+
+  function openDb(){
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise(function(resolve, reject){
+      if (!('indexedDB' in window)){ reject(new Error('IndexedDB unavailable')); return; }
+      var req;
+      try { req = indexedDB.open(DB_NAME, DB_VERSION); }
+      catch(e){ reject(e); return; }
+      req.onupgradeneeded = function(e){
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+      };
+      req.onsuccess = function(e){ resolve(e.target.result); };
+      req.onerror = function(){ reject(req.error || new Error('IndexedDB open failed')); };
+      req.onblocked = function(){ reject(new Error('IndexedDB open blocked')); };
     });
+    return dbPromise;
+  }
+
+  function idbGet(key){
+    return openDb().then(function(db){
+      return new Promise(function(resolve, reject){
+        var req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
+        req.onsuccess = function(){ resolve(req.result === undefined ? null : req.result); };
+        req.onerror = function(){ reject(req.error); };
+      });
+    });
+  }
+  function idbSet(key, value){
+    return openDb().then(function(db){
+      return new Promise(function(resolve, reject){
+        var tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(value, key);
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ reject(tx.error); };
+        tx.onabort = function(){ reject(tx.error || new Error('IndexedDB write aborted')); };
+      });
+    });
+  }
+  function idbDelete(key){
+    return openDb().then(function(db){
+      return new Promise(function(resolve, reject){
+        var tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME)['delete'](key);
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ reject(tx.error); };
+      });
+    });
+  }
+
+  function safeGet(key){
+    return idbGet(key)['catch'](function(e){ console.error('storage get failed', e); return null; });
   }
   function safeSet(key, value){
-    return new Promise(function(resolve){
-      try { localStorage.setItem(key, JSON.stringify(value)); resolve(true); }
-      catch(e){ console.error('storage set failed', e); resolve(false); }
-    });
+    return idbSet(key, value)['catch'](function(e){ console.error('storage set failed', e); return false; });
   }
   function safeDelete(key){
-    return new Promise(function(resolve){
-      try { localStorage.removeItem(key); } catch(e){}
-      resolve();
+    return idbDelete(key)['catch'](function(e){ console.error('storage delete failed', e); return null; });
+  }
+
+  // ---------- One-time migration from the old localStorage-backed decks ----------
+  var MIGRATION_FLAG_KEY = 'studydeck:migratedToIndexedDB';
+
+  function migrationNeeded(){
+    try {
+      return localStorage.getItem(MIGRATION_FLAG_KEY) !== '1' && !!localStorage.getItem(STORAGE_INDEX_KEY);
+    } catch(e){ return false; }
+  }
+
+  function migrateFromLocalStorage(){
+    var oldIndex = [];
+    try { oldIndex = JSON.parse(localStorage.getItem(STORAGE_INDEX_KEY) || '[]') || []; }
+    catch(e){ oldIndex = []; }
+
+    var chain = Promise.resolve();
+    oldIndex.forEach(function(entry){
+      chain = chain.then(function(){
+        var raw = null;
+        try { raw = localStorage.getItem('deck:' + entry.id); } catch(e){}
+        if (!raw) return null;
+        var deck = null;
+        try { deck = JSON.parse(raw); } catch(e){ return null; }
+        return idbSet('deck:' + entry.id, deck);
+      });
+    });
+
+    return chain.then(function(){
+      return idbSet(STORAGE_INDEX_KEY, oldIndex);
+    }).then(function(){
+      try {
+        oldIndex.forEach(function(entry){ localStorage.removeItem('deck:' + entry.id); });
+        localStorage.removeItem(STORAGE_INDEX_KEY);
+        localStorage.setItem(MIGRATION_FLAG_KEY, '1');
+      } catch(e){}
+    })['catch'](function(e){
+      console.error('migration to IndexedDB failed, will retry next load', e);
     });
   }
 
@@ -1370,8 +1457,16 @@
   });
 
   // ---------- Init ----------
-  el.uploadScreen.hidden = false;
   el.workspaceScreen.hidden = true;
+  if (migrationNeeded()){
+    showLoading('Upgrading storage…');
+    migrateFromLocalStorage().then(function(){
+      hideLoading();
+      el.uploadScreen.hidden = false;
+    });
+  } else {
+    el.uploadScreen.hidden = false;
+  }
 })();
 </script>
 </body>
