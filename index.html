@@ -308,8 +308,33 @@
     background:var(--paper-raise);
   }
   .test-generator-label{display:block;font-size:14px;color:var(--ink-soft);margin-bottom:10px;}
+  .test-deck-picker{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    margin-bottom:14px;flex-wrap:wrap;
+  }
+  .test-deck-picker-label{font-size:14px;color:var(--ink);}
+  .test-deck-picker-label strong{color:var(--teal-deep);font-weight:600;}
+  .test-qty-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .test-qty-row label{font-size:14px;color:var(--ink-soft);}
+  #testQtySelect{
+    padding:8px 12px;border:1px solid var(--line);border-radius:8px;
+    background:var(--white);font-family:inherit;font-size:14px;color:var(--ink);
+  }
   .difficulty-row{display:flex;gap:10px;}
   .difficulty-row .btn{flex:1;min-width:0;}
+  .deck-picker-item{
+    display:flex;align-items:center;gap:12px;
+    padding:12px 0;border-bottom:1px solid var(--line);
+  }
+  .deck-picker-item input[type="checkbox"]{width:20px;height:20px;flex:none;accent-color:var(--teal);}
+  .deck-picker-item label{flex:1;min-width:0;cursor:pointer;}
+  .deck-picker-item label strong{display:block;font-size:15px;color:var(--ink);margin-bottom:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .deck-picker-item label span{font-size:13px;color:var(--ink-soft);}
+  .deck-picker-footer{
+    position:sticky;bottom:0;background:var(--paper);
+    padding:14px 0 4px;display:flex;justify-content:flex-end;
+  }
 
   .test-intro{color:var(--ink-soft);font-size:14px;margin:0 0 20px;}
   .test-question{margin-bottom:26px;max-width:640px;}
@@ -461,6 +486,21 @@
 
       <div class="test-generator">
         <span class="test-generator-label">Create a practice test</span>
+        <div class="test-deck-picker">
+          <span class="test-deck-picker-label">From: <strong id="testDeckSummary"></strong></span>
+          <button id="chooseDecksBtn" class="btn-text">Choose decks</button>
+        </div>
+        <div class="test-qty-row">
+          <label for="testQtySelect">Questions</label>
+          <select id="testQtySelect">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="15">15</option>
+            <option value="20">20</option>
+            <option value="25">25</option>
+            <option value="30">30</option>
+          </select>
+        </div>
         <div class="difficulty-row">
           <button class="btn btn-ghost difficulty-btn" data-difficulty="easy">Easy</button>
           <button class="btn btn-ghost difficulty-btn" data-difficulty="medium">Medium</button>
@@ -500,6 +540,19 @@
       <button id="closeLibraryBtn" class="btn-text">Close</button>
     </div>
     <div id="libraryList" class="library-list"></div>
+  </div>
+</div>
+
+<div id="deckPickerModal" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Combine decks for this test</h3>
+      <button id="closeDeckPickerBtn" class="btn-text">Close</button>
+    </div>
+    <div id="deckPickerList" class="library-list"></div>
+    <div class="deck-picker-footer">
+      <button id="deckPickerDoneBtn" class="btn btn-primary">Done</button>
+    </div>
   </div>
 </div>
 
@@ -555,6 +608,13 @@
     libraryModal: document.getElementById('libraryModal'),
     closeLibraryBtn: document.getElementById('closeLibraryBtn'),
     libraryList: document.getElementById('libraryList'),
+    testDeckSummary: document.getElementById('testDeckSummary'),
+    chooseDecksBtn: document.getElementById('chooseDecksBtn'),
+    testQtySelect: document.getElementById('testQtySelect'),
+    deckPickerModal: document.getElementById('deckPickerModal'),
+    closeDeckPickerBtn: document.getElementById('closeDeckPickerBtn'),
+    deckPickerList: document.getElementById('deckPickerList'),
+    deckPickerDoneBtn: document.getElementById('deckPickerDoneBtn'),
     settingsBtn: document.getElementById('settingsBtn'),
     settingsModal: document.getElementById('settingsModal'),
     closeSettingsBtn: document.getElementById('closeSettingsBtn'),
@@ -568,6 +628,7 @@
   var activeTab = 'review';
   var flashState = null;
   var testState = null;
+  var selectedTestDecks = []; // [{ id, title }, ...] — decks whose material will be combined for the next practice test
 
   // ---------- Storage engine: IndexedDB-backed generic key/value store ----------
   // Swapped from localStorage (capped around 5-10MB) to IndexedDB, which gets a much
@@ -844,7 +905,7 @@
   }
 
   // ---------- Claude API ----------
-  function callClaude(systemPrompt, userText){
+  function callClaude(systemPrompt, userText, maxTokens){
     var apiKey = getApiKey();
     if (!apiKey){
       return Promise.reject(new Error('NO_API_KEY'));
@@ -859,7 +920,7 @@
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
+        max_tokens: maxTokens || 4096,
         system: systemPrompt,
         messages: [{ role: 'user', content: userText }]
       })
@@ -993,7 +1054,11 @@
     el.workspaceScreen.hidden = false;
     flashState = null;
     testState = null;
+    selectedTestDecks = (currentDeck.test && currentDeck.test.sourceDecks && currentDeck.test.sourceDecks.length)
+      ? currentDeck.test.sourceDecks.slice()
+      : [{ id: currentDeck.id, title: currentDeck.title }];
     renderWorkspaceHeader();
+    renderTestDeckSummary();
     var hasAny = currentDeck.reviewSheet || currentDeck.flashcards || currentDeck.test;
     el.tabs.hidden = !hasAny;
     if (hasAny){
@@ -1011,6 +1076,18 @@
     el.deckMeta.textContent = currentDeck.fileName + ' · ' + currentDeck.unitCount + ' ' + currentDeck.unitLabel + ' extracted';
     el.genReviewBtn.textContent = currentDeck.reviewSheet ? 'Regenerate review sheet' : 'Create review sheet';
     el.genFlashBtn.textContent = currentDeck.flashcards ? 'Regenerate flashcards' : 'Create flashcards';
+  }
+
+  function renderTestDeckSummary(){
+    if (!el.testDeckSummary) return;
+    var names = selectedTestDecks.map(function(d){ return d.title; });
+    if (names.length <= 1){
+      el.testDeckSummary.textContent = names[0] || currentDeck.title;
+    } else if (names.length === 2){
+      el.testDeckSummary.textContent = names.join(' + ');
+    } else {
+      el.testDeckSummary.textContent = names[0] + ' + ' + (names.length - 1) + ' more';
+    }
   }
 
   el.newUploadBtn.addEventListener('click', function(){
@@ -1099,29 +1176,85 @@
     medium: 'Write questions that require applying a concept or connecting two related ideas, not just recalling a definition.',
     hard: 'Write challenging questions that require multi-step reasoning, distinguishing between similar or easily confused concepts, or applying the material to a new practical or clinical scenario.'
   };
-  function testSystemPrompt(difficulty){
-    return "You are an expert study coach creating a practice test. Analyze the lecture content the user gives you and write a " + difficulty + " practice test. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape: {\"questions\": [{\"question\": string, \"options\": [string, string, string, string], \"correctIndex\": number, \"explanation\": string}, ...]}. Write 10 to 15 multiple-choice questions, each with exactly 4 options and exactly one correct answer (correctIndex is 0-based). " + TEST_DIFFICULTY_GUIDANCE[difficulty];
+  function testSystemPrompt(difficulty, qty, multiSource){
+    var sourceNote = multiSource
+      ? " The material comes from more than one lecture, each marked with a '=== Source: <title> ===' header \u2014 pull questions from across all of them, not just the first."
+      : '';
+    return "You are an expert study coach creating a practice test. Analyze the lecture content the user gives you and write a " + difficulty + " practice test." + sourceNote + " Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape: {\"questions\": [{\"question\": string, \"options\": [string, string, string, string], \"correctIndex\": number, \"explanation\": string}, ...]}. Write exactly " + qty + " multiple-choice questions, each with exactly 4 options and exactly one correct answer (correctIndex is 0-based). " + TEST_DIFFICULTY_GUIDANCE[difficulty];
+  }
+
+  // Rough token budget per question (question + 4 options + explanation + JSON overhead),
+  // clamped to a sane floor/ceiling so max_tokens tracks the requested quantity instead
+  // of being a flat guess.
+  function testMaxTokens(qty){
+    return Math.max(1024, Math.min(8000, qty * 220 + 500));
+  }
+
+  // Combines extracted text from one or more decks for a single generation call.
+  // Kept under the same MAX_CHARS budget used for a single-deck upload — combining
+  // decks doesn't multiply the per-request cap, it shares it.
+  function buildCombinedTestText(decks){
+    var multi = decks.length > 1;
+    var combined = multi
+      ? decks.map(function(d){ return '=== Source: ' + d.title + ' ===\n' + d.extractedText; }).join('\n\n')
+      : decks[0].extractedText;
+    var truncated = false;
+    if (combined.length > MAX_CHARS){
+      combined = combined.slice(0, MAX_CHARS);
+      truncated = true;
+    }
+    return { text: combined, truncated: truncated };
   }
 
   function generateTest(difficulty){
     if (!currentDeck) return;
-    showLoading('Writing your ' + difficulty + ' practice test…');
-    callClaude(testSystemPrompt(difficulty), currentDeck.extractedText).then(function(raw){
-      var parsed = parseJsonLoose(raw);
-      if (!parsed || !Array.isArray(parsed.questions) || !parsed.questions.length) throw new Error('bad shape');
-      currentDeck.test = { difficulty: difficulty, questions: parsed.questions };
-      hideLoading();
-      saveDeck(currentDeck);
-      testState = null;
-      el.tabs.hidden = false;
-      activeTab = 'test';
-      renderTabs();
+    if (!selectedTestDecks.length){
+      showError('Choose at least one deck first.');
+      return;
+    }
+    var qty = parseInt(el.testQtySelect.value, 10) || 10;
+    var sources = selectedTestDecks.slice();
+
+    showLoading('Gathering material…');
+    var loadPromises = sources.map(function(s){
+      if (s.id === currentDeck.id) return Promise.resolve(currentDeck);
+      return safeGet('deck:' + s.id);
+    });
+
+    Promise.all(loadPromises).then(function(decks){
+      var found = decks.filter(function(d){ return d && d.extractedText; });
+      if (!found.length) throw new Error('NO_MATERIAL');
+      var combined = buildCombinedTestText(found);
+      var multiSource = found.length > 1;
+      showLoading('Writing your ' + difficulty + ' practice test…');
+      return callClaude(testSystemPrompt(difficulty, qty, multiSource), combined.text, testMaxTokens(qty)).then(function(raw){
+        var parsed = parseJsonLoose(raw);
+        if (!parsed || !Array.isArray(parsed.questions) || !parsed.questions.length) throw new Error('bad shape');
+        currentDeck.test = {
+          difficulty: difficulty,
+          qty: qty,
+          sourceDecks: found.map(function(d){ return { id: d.id, title: d.title }; }),
+          truncated: combined.truncated,
+          questions: parsed.questions
+        };
+        hideLoading();
+        saveDeck(currentDeck);
+        testState = null;
+        el.tabs.hidden = false;
+        activeTab = 'test';
+        renderTabs();
+        if (combined.truncated){
+          showError('The combined material was long, so only part of it was used to write this test.');
+        }
+      });
     })['catch'](function(err){
       hideLoading();
       console.error(err);
       if (err && err.message === 'NO_API_KEY'){
         showError('Add your Anthropic API key first.');
         openSettings();
+      } else if (err && err.message === 'NO_MATERIAL'){
+        showError("Couldn't load the selected decks. Try choosing decks again.");
       } else {
         showError("The practice test didn't come back as expected. Try again.");
       }
@@ -1134,6 +1267,56 @@
     });
   });
 
+  // ---------- Practice test: deck picker (combine multiple saved decks) ----------
+  var deckPickerPending = []; // [{id,title}] working selection while the modal is open
+
+  function openDeckPicker(){
+    deckPickerPending = selectedTestDecks.slice();
+    el.deckPickerModal.hidden = false;
+    loadDeckIndex().then(function(idx){
+      if (!idx.length){
+        el.deckPickerList.innerHTML = '<p class="library-empty">No saved decks yet.</p>';
+        return;
+      }
+      var html = '';
+      idx.forEach(function(d){
+        var checked = deckPickerPending.some(function(s){ return s.id === d.id; });
+        html += '<div class="deck-picker-item">' +
+          '<input type="checkbox" id="pick-' + d.id + '" data-id="' + d.id + '" data-title="' + escapeHtml(d.title) + '"' + (checked ? ' checked' : '') + ' />' +
+          '<label for="pick-' + d.id + '"><strong>' + escapeHtml(d.title) + '</strong>' +
+          '<span>' + escapeHtml(d.fileName) + ' · ' + relativeDate(d.createdAt) + '</span></label>' +
+          '</div>';
+      });
+      el.deckPickerList.innerHTML = html;
+      el.deckPickerList.querySelectorAll('input[type="checkbox"]').forEach(function(cb){
+        cb.addEventListener('change', function(){
+          var id = cb.getAttribute('data-id');
+          var title = cb.getAttribute('data-title');
+          if (cb.checked){
+            if (!deckPickerPending.some(function(s){ return s.id === id; })) deckPickerPending.push({ id: id, title: title });
+          } else {
+            deckPickerPending = deckPickerPending.filter(function(s){ return s.id !== id; });
+          }
+        });
+      });
+    });
+  }
+  function closeDeckPicker(){ el.deckPickerModal.hidden = true; }
+  el.chooseDecksBtn.addEventListener('click', openDeckPicker);
+  el.closeDeckPickerBtn.addEventListener('click', closeDeckPicker);
+  el.deckPickerModal.addEventListener('click', function(e){
+    if (e.target === el.deckPickerModal) closeDeckPicker();
+  });
+  el.deckPickerDoneBtn.addEventListener('click', function(){
+    if (!deckPickerPending.length){
+      showError('Choose at least one deck.');
+      return;
+    }
+    selectedTestDecks = deckPickerPending.slice();
+    renderTestDeckSummary();
+    closeDeckPicker();
+  });
+
   function renderTest(){
     if (!currentDeck.test){ el.testPanel.innerHTML = ''; return; }
     if (!testState) testState = { answers: {}, submitted: false };
@@ -1141,13 +1324,17 @@
     var difficultyLabel = test.difficulty.charAt(0).toUpperCase() + test.difficulty.slice(1);
     var html = '';
 
+    var sourcesLine = (test.sourceDecks && test.sourceDecks.length > 1)
+      ? ' &middot; Combining: ' + escapeHtml(test.sourceDecks.map(function(d){ return d.title; }).join(', '))
+      : '';
+
     if (testState.submitted){
       var correct = 0;
       test.questions.forEach(function(q, i){ if (testState.answers[i] === q.correctIndex) correct++; });
       html += '<div class="test-score"><h3>' + correct + ' / ' + test.questions.length + '</h3>' +
-        '<p>' + difficultyLabel + ' practice test</p></div>';
+        '<p>' + difficultyLabel + ' practice test' + sourcesLine + '</p></div>';
     } else {
-      html += '<p class="test-intro">' + difficultyLabel + ' practice test &middot; ' + test.questions.length + ' questions</p>';
+      html += '<p class="test-intro">' + difficultyLabel + ' practice test &middot; ' + test.questions.length + ' questions' + sourcesLine + '</p>';
     }
 
     test.questions.forEach(function(q, qi){
