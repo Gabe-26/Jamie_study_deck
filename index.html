@@ -929,6 +929,9 @@
       if (!res.ok) throw new Error('The analysis request failed (status ' + res.status + ').');
       return res.json();
     }).then(function(data){
+      if (data.stop_reason === 'max_tokens'){
+        throw new Error('MAX_TOKENS_CUT_OFF');
+      }
       var blocks = (data.content || []).filter(function(b){ return b.type === 'text'; }).map(function(b){ return b.text; });
       return blocks.join('\n');
     });
@@ -1122,6 +1125,8 @@
       if (err && err.message === 'NO_API_KEY'){
         showError('Add your Anthropic API key first.');
         openSettings();
+      } else if (err && err.message === 'MAX_TOKENS_CUT_OFF'){
+        showError("The response was cut off before it finished. Try again.");
       } else {
         showError("The review sheet didn't come back as expected. Try again.");
       }
@@ -1166,6 +1171,8 @@
       if (err && err.message === 'NO_API_KEY'){
         showError('Add your Anthropic API key first.');
         openSettings();
+      } else if (err && err.message === 'MAX_TOKENS_CUT_OFF'){
+        showError("The response was cut off before it finished. Try again.");
       } else {
         showError("The flashcards didn't come back as expected. Try again.");
       }
@@ -1187,9 +1194,11 @@
 
   // Rough token budget per question (question + 4 options + explanation + JSON overhead),
   // clamped to a sane floor/ceiling so max_tokens tracks the requested quantity instead
-  // of being a flat guess.
+  // of being a flat guess. The model's real ceiling is far higher (128K), so this cap
+  // exists only to avoid an unbounded request — Anthropic bills actual tokens generated,
+  // not this ceiling, so raising it doesn't cost more unless a test genuinely needs it.
   function testMaxTokens(qty){
-    return Math.max(1024, Math.min(8000, qty * 220 + 500));
+    return Math.max(1024, Math.min(16000, qty * 300 + 800));
   }
 
   // Combines extracted text from one or more decks for a single generation call.
@@ -1257,6 +1266,8 @@
         openSettings();
       } else if (err && err.message === 'NO_MATERIAL'){
         showError("Couldn't load the selected decks. Try choosing decks again.");
+      } else if (err && err.message === 'MAX_TOKENS_CUT_OFF'){
+        showError('The response was cut off before it finished. Try fewer questions or fewer combined decks.');
       } else {
         showError("The practice test didn't come back as expected. Try again.");
       }
