@@ -919,9 +919,10 @@
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         max_tokens: maxTokens || 4096,
         system: systemPrompt,
+        thinking: { type: 'disabled' },
         messages: [{ role: 'user', content: userText }]
       })
     }).then(function(res){
@@ -1103,12 +1104,12 @@
   });
 
   // ---------- Generate: Review sheet ----------
-  var REVIEW_SYSTEM = "You are an expert study coach. Analyze the lecture content the user gives you and produce a concise, exam-focused review sheet. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape: {\"title\": string, \"topics\": [{\"heading\": string, \"points\": [string, ...]}]}. Cover the 5 to 8 most important topics, each with 3 to 6 short bullet points capturing key definitions, mechanisms, relationships, and facts most likely to be tested. Be concise so the whole response fits in a short reply.";
+  var REVIEW_SYSTEM = "You are an expert study coach. Analyze the lecture content the user gives you and produce a thorough, exam-focused review sheet. Favor coverage and precision over brevity: err on the side of covering more named structures and concepts rather than compressing several distinct ones into one bullet. Respond with ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape: {\"title\": string, \"topics\": [{\"heading\": string, \"points\": [string, ...]}]}. Cover 10 to 18 topics depending on how much distinct material the lecture actually contains, each with 4 to 8 short bullet points capturing key definitions, mechanisms, relationships, and facts most likely to be tested. Every named structure, region, tract, or pathway that gets its own heading, label, or diagram callout in the source material should be represented by at least its own bullet \u2014 don't merge multiple distinct named structures into a single generic bullet just to save space.";
 
   el.genReviewBtn.addEventListener('click', function(){
     if (!currentDeck) return;
     showLoading('Reading through the material…');
-    callClaude(REVIEW_SYSTEM, currentDeck.extractedText).then(function(raw){
+    callClaude(REVIEW_SYSTEM, currentDeck.extractedText, 8000).then(function(raw){
       var parsed = parseJsonLoose(raw);
       if (!parsed || !Array.isArray(parsed.topics)) throw new Error('bad shape');
       currentDeck.reviewSheet = parsed;
