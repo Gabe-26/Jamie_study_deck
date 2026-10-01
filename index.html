@@ -562,6 +562,19 @@
   </div>
 </div>
 
+<div id="incomingModal" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Add shared flashcards?</h3>
+    </div>
+    <p id="incomingSummary" class="settings-copy"></p>
+    <div class="settings-actions">
+      <button id="incomingAddBtn" class="btn btn-primary">Add to my decks</button>
+      <button id="incomingCancelBtn" class="btn btn-ghost">Not now</button>
+    </div>
+  </div>
+</div>
+
 <div id="settingsModal" class="modal-overlay" hidden>
   <div class="modal">
     <div class="modal-header">
@@ -629,7 +642,11 @@
     clearKeyBtn: document.getElementById('clearKeyBtn'),
     keyStatus: document.getElementById('keyStatus'),
     importCardsBtn: document.getElementById('importCardsBtn'),
-    importFileInput: document.getElementById('importFileInput')
+    importFileInput: document.getElementById('importFileInput'),
+    incomingModal: document.getElementById('incomingModal'),
+    incomingSummary: document.getElementById('incomingSummary'),
+    incomingAddBtn: document.getElementById('incomingAddBtn'),
+    incomingCancelBtn: document.getElementById('incomingCancelBtn')
   };
 
   var currentDeck = null;
@@ -1469,7 +1486,8 @@
     var progressPct = Math.round(((flashState.pos) / order.length) * 100);
 
     var html = '<div class="flash-toolbar"><span>Card ' + (flashState.pos + 1) + ' of ' + order.length + '</span>' +
-      '<span class="flash-toolbar-actions"><button id="shareCardsBtn" class="btn-text">Share</button>' +
+      '<span class="flash-toolbar-actions"><button id="shareLinkBtn" class="btn-text">Share link</button>' +
+      '<button id="shareFileBtn" class="btn-text">Share file</button>' +
       '<button id="shuffleBtn" class="btn-text">Shuffle</button></span></div>' +
       '<div class="flash-progress-track"><div class="flash-progress-fill" style="width:' + progressPct + '%"></div></div>' +
       '<div class="flashcard-stage"><div class="flashcard' + (flashState.flipped ? ' flipped' : '') + '" id="flashcardEl">' +
@@ -1497,7 +1515,10 @@
       renderFlashcards();
     });
 
-    document.getElementById('shareCardsBtn').addEventListener('click', shareCards);
+    prepareShareLink(); // build the link in the background so the tap below can share instantly
+    var shareLinkBtn = document.getElementById('shareLinkBtn');
+    shareLinkBtn.addEventListener('click', function(){ shareLink(shareLinkBtn); });
+    document.getElementById('shareFileBtn').addEventListener('click', shareCards);
 
     document.getElementById('shuffleBtn').addEventListener('click', function(){
       var arr = order.slice();
@@ -1615,6 +1636,43 @@
     }
   }
 
+  // Shared helpers for both import paths (file and link).
+  function cleanCards(raw){
+    return (Array.isArray(raw) ? raw : []).filter(function(c){
+      return c && typeof c.front === 'string' && typeof c.back === 'string' && c.front.trim() && c.back.trim();
+    }).slice(0, MAX_IMPORT_CARDS).map(function(c){
+      return { front: c.front.trim(), back: c.back.trim() };
+    });
+  }
+  function resolveTitle(t, fallback){
+    return (typeof t === 'string' && t.trim()) ? t.trim().slice(0, 200) : fallback;
+  }
+  // The cards double as the deck's source text, so review sheets and practice tests
+  // can still be generated from an imported deck.
+  function createDeckFromCards(title, fileName, cards){
+    var text = cards.map(function(c){ return 'Q: ' + c.front + '\nA: ' + c.back; }).join('\n\n').slice(0, MAX_CHARS);
+    return {
+      id: makeId(),
+      title: title,
+      fileName: fileName,
+      createdAt: new Date().toISOString(),
+      extractedText: text,
+      unitCount: cards.length,
+      unitLabel: cards.length === 1 ? 'card' : 'cards',
+      truncated: false,
+      fileDataUrl: null,
+      reviewSheet: null,
+      flashcards: cards,
+      test: null
+    };
+  }
+  function saveAndOpenImported(deck){
+    return saveDeck(deck).then(function(){
+      currentDeck = deck;
+      openWorkspace();
+    });
+  }
+
   function importCardsFromFile(file){
     if (!file) return;
     hideError();
@@ -1624,39 +1682,11 @@
       try { data = JSON.parse(txt); } catch(e){ throw new Error('IMPORT_NOT_JSON'); }
       if (!data || data.format !== CARDS_FORMAT) throw new Error('IMPORT_WRONG_FORMAT');
       if (typeof data.version !== 'number' || data.version > CARDS_FORMAT_VERSION) throw new Error('IMPORT_TOO_NEW');
-      var cards = (Array.isArray(data.cards) ? data.cards : []).filter(function(c){
-        return c && typeof c.front === 'string' && typeof c.back === 'string' && c.front.trim() && c.back.trim();
-      }).slice(0, MAX_IMPORT_CARDS).map(function(c){
-        return { front: c.front.trim(), back: c.back.trim() };
-      });
+      var cards = cleanCards(data.cards);
       if (!cards.length) throw new Error('IMPORT_NO_CARDS');
-
-      var title = (typeof data.title === 'string' && data.title.trim())
-        ? data.title.trim().slice(0, 200)
-        : (file.name || 'Imported cards').replace(/\.json$/i, '');
-      // The cards double as the deck's source text, so review sheets and practice tests
-      // can still be generated from an imported deck.
-      var text = cards.map(function(c){ return 'Q: ' + c.front + '\nA: ' + c.back; }).join('\n\n').slice(0, MAX_CHARS);
-
-      var deck = {
-        id: makeId(),
-        title: title,
-        fileName: file.name || 'imported-flashcards.json',
-        createdAt: new Date().toISOString(),
-        extractedText: text,
-        unitCount: cards.length,
-        unitLabel: cards.length === 1 ? 'card' : 'cards',
-        truncated: false,
-        fileDataUrl: null,
-        reviewSheet: null,
-        flashcards: cards,
-        test: null
-      };
-      return saveDeck(deck).then(function(){
-        hideLoading();
-        currentDeck = deck;
-        openWorkspace();
-      });
+      var title = resolveTitle(data.title, (file.name || 'Imported cards').replace(/\.json$/i, ''));
+      var deck = createDeckFromCards(title, file.name || 'imported-flashcards.json', cards);
+      return saveAndOpenImported(deck).then(hideLoading);
     })['catch'](function(err){
       hideLoading();
       console.error(err);
@@ -1668,6 +1698,198 @@
       else showError("Couldn't import that file. Try again.");
     });
   }
+
+  // ---------- Share link ----------
+  // The cards are packed into the URL hash (#share=<version>.<z|r>.<data>). The hash never
+  // goes to a server. 'z' = deflate-raw compressed via the browser's built-in CompressionStream,
+  // 'r' = uncompressed fallback for browsers that lack it. Same privacy rule as the file:
+  // title + card text only.
+  var SHARE_LINK_VERSION = 1;
+  var LINK_PARAM = 'share=';
+  var MAX_LINK_BYTES = 2000000;   // cap on decompressed size, guards against a malicious link
+  var LONG_LINK_CHARS = 8000;
+  var shareLinkCache = null;      // { cards, title, url, promise }
+  var incomingPending = null;     // { title, cards } waiting on the "Add shared flashcards?" prompt
+
+  function bytesToB64url(bytes){
+    var bin = '';
+    for (var i = 0; i < bytes.length; i += 8192){
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function b64urlToBytes(str){
+    var b = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (b.length % 4) b += '=';
+    var bin = atob(b);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  // Pushes bytes through a Compression/DecompressionStream and collects the result.
+  function runStream(bytes, transform, maxBytes){
+    var writer = transform.writable.getWriter();
+    writer.write(bytes)['catch'](function(){});
+    writer.close()['catch'](function(){});
+    var reader = transform.readable.getReader();
+    var chunks = [], total = 0;
+    function pump(){
+      return reader.read().then(function(r){
+        if (r.done){
+          var out = new Uint8Array(total), off = 0;
+          chunks.forEach(function(c){ out.set(c, off); off += c.length; });
+          return out;
+        }
+        total += r.value.length;
+        if (maxBytes && total > maxBytes){ reader.cancel(); throw new Error('LINK_BAD'); }
+        chunks.push(r.value);
+        return pump();
+      });
+    }
+    return pump();
+  }
+  function encodeSharePayload(title, cards){
+    var json = JSON.stringify({ t: title, c: cards.map(function(c){ return [c.front, c.back]; }) });
+    var raw = new TextEncoder().encode(json);
+    if (typeof CompressionStream === 'undefined'){
+      return Promise.resolve(SHARE_LINK_VERSION + '.r.' + bytesToB64url(raw));
+    }
+    return runStream(raw, new CompressionStream('deflate-raw')).then(function(z){
+      return SHARE_LINK_VERSION + '.z.' + bytesToB64url(z);
+    });
+  }
+  function decodeSharePayload(param){
+    var parts = String(param).split('.');
+    if (parts.length !== 3) return Promise.reject(new Error('LINK_BAD'));
+    var ver = parseInt(parts[0], 10);
+    if (!(ver >= 1)) return Promise.reject(new Error('LINK_BAD'));
+    if (ver > SHARE_LINK_VERSION) return Promise.reject(new Error('LINK_TOO_NEW'));
+    var bytes;
+    try { bytes = b64urlToBytes(parts[2]); } catch(e){ return Promise.reject(new Error('LINK_BAD')); }
+    var bytesPromise;
+    if (parts[1] === 'z'){
+      if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('LINK_NO_SUPPORT'));
+      bytesPromise = runStream(bytes, new DecompressionStream('deflate-raw'), MAX_LINK_BYTES);
+    } else if (parts[1] === 'r'){
+      bytesPromise = Promise.resolve(bytes);
+    } else {
+      return Promise.reject(new Error('LINK_BAD'));
+    }
+    return bytesPromise.then(function(out){
+      var data = JSON.parse(new TextDecoder().decode(out));
+      var rows = Array.isArray(data.c) ? data.c : [];
+      return {
+        title: data.t,
+        cards: rows.map(function(r){ return Array.isArray(r) ? { front: r[0], back: r[1] } : null; })
+      };
+    })['catch'](function(err){
+      if (err && err.message && err.message.indexOf('LINK_') === 0) throw err;
+      throw new Error('LINK_BAD');
+    });
+  }
+
+  // Builds (or reuses) the link for the current deck. Called every time the flashcards render,
+  // so by the time you tap Share link the URL is already sitting in memory and the tap can open
+  // the share sheet synchronously, which iPad Safari requires.
+  function prepareShareLink(){
+    var cards = currentDeck && currentDeck.flashcards;
+    if (!cards || !cards.length) return null;
+    if (shareLinkCache && shareLinkCache.cards === cards && shareLinkCache.title === currentDeck.title) return shareLinkCache;
+    var entry = { cards: cards, title: currentDeck.title, url: null, promise: null };
+    entry.promise = encodeSharePayload(currentDeck.title, cards).then(function(param){
+      entry.url = location.origin + location.pathname + '#' + LINK_PARAM + param;
+      return entry.url;
+    });
+    entry.promise['catch'](function(e){ console.error('share link build failed', e); });
+    shareLinkCache = entry;
+    return entry;
+  }
+
+  function flashButtonLabel(btn, text){
+    var original = btn.textContent;
+    btn.textContent = text;
+    setTimeout(function(){ btn.textContent = original; }, 2000);
+  }
+  function copyLink(url, btn){
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(function(){
+        flashButtonLabel(btn, 'Link copied');
+      }, function(){
+        window.prompt('Copy this link:', url);
+      });
+    } else {
+      window.prompt('Copy this link:', url);
+    }
+  }
+  function deliverLink(url, title, btn){
+    if (navigator.share){
+      navigator.share({ title: title, url: url })['catch'](function(err){
+        if (err && err.name === 'AbortError') return; // user closed the share sheet
+        copyLink(url, btn);
+      });
+    } else {
+      copyLink(url, btn);
+    }
+    if (url.length > LONG_LINK_CHARS){
+      showError("This deck makes a long link. If it doesn't open for the person you sent it to, use Share file instead.");
+    }
+  }
+  function shareLink(btn){
+    if (location.protocol !== 'http:' && location.protocol !== 'https:'){
+      showError('Share links only work from the hosted version of the app (your GitHub Pages address), not from a file opened directly.');
+      return;
+    }
+    var entry = prepareShareLink();
+    if (!entry) return;
+    if (entry.url){
+      deliverLink(entry.url, entry.title, btn); // synchronous: still inside the tap
+    } else {
+      // Rare: tapped before the background build finished. Wait, then try; falls back to copying.
+      entry.promise.then(function(url){
+        deliverLink(url, entry.title, btn);
+      })['catch'](function(){
+        showError("Couldn't build the share link. Try Share file instead.");
+      });
+    }
+  }
+
+  // ---------- Incoming share link ----------
+  function handleIncomingLink(){
+    var prefix = '#' + LINK_PARAM;
+    var h = location.hash || '';
+    if (h.indexOf(prefix) !== 0) return;
+    var param = h.slice(prefix.length);
+    // Clear the hash right away so a reload doesn't re-prompt.
+    try { history.replaceState(null, '', location.pathname + location.search); } catch(e){}
+    showLoading('Opening shared flashcards…');
+    decodeSharePayload(param).then(function(res){
+      var cards = cleanCards(res.cards);
+      if (!cards.length) throw new Error('LINK_NO_CARDS');
+      hideLoading();
+      incomingPending = { title: resolveTitle(res.title, 'Shared flashcards'), cards: cards };
+      el.incomingSummary.textContent = '\u201C' + incomingPending.title + '\u201D \u00B7 ' + cards.length + ' card' + (cards.length === 1 ? '' : 's') +
+        '. They\u2019ll be saved as a new deck on this device.';
+      el.incomingModal.hidden = false;
+    })['catch'](function(err){
+      hideLoading();
+      console.error(err);
+      var m = err && err.message;
+      if (m === 'LINK_TOO_NEW') showError('That link was made with a newer version of Study Deck. Reload the app and open it again.');
+      else if (m === 'LINK_NO_SUPPORT') showError("This browser can't open compressed share links. Ask for the Share file version instead.");
+      else if (m === 'LINK_NO_CARDS') showError("That link doesn't contain any usable flashcards.");
+      else showError("That share link looks incomplete or damaged. Ask for it to be sent again, or use Share file.");
+    });
+  }
+  function closeIncoming(){ el.incomingModal.hidden = true; incomingPending = null; }
+  el.incomingCancelBtn.addEventListener('click', closeIncoming);
+  el.incomingModal.addEventListener('click', function(e){ if (e.target === el.incomingModal) closeIncoming(); });
+  el.incomingAddBtn.addEventListener('click', function(){
+    if (!incomingPending) return;
+    var pending = incomingPending;
+    closeIncoming();
+    hideError();
+    saveAndOpenImported(createDeckFromCards(pending.title, 'Shared link', pending.cards));
+  });
 
   el.importCardsBtn.addEventListener('click', function(){ el.importFileInput.click(); });
   el.importFileInput.addEventListener('change', function(){
@@ -1788,9 +2010,11 @@
     migrateFromLocalStorage().then(function(){
       hideLoading();
       el.uploadScreen.hidden = false;
+      handleIncomingLink();
     });
   } else {
     el.uploadScreen.hidden = false;
+    handleIncomingLink();
   }
 })();
 </script>
