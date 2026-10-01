@@ -1165,7 +1165,18 @@
     });
     el.reviewPanel.innerHTML = html;
     var printBtn = document.getElementById('printReviewBtn');
-    if (printBtn) printBtn.addEventListener('click', function(){ window.print(); });
+    if (printBtn) printBtn.addEventListener('click', function(){
+      // Browsers suggest the page title as the PDF file name, so swap in the deck's title
+      // for the print, then put the normal title back once the print dialog closes.
+      var originalTitle = document.title;
+      document.title = (currentDeck && currentDeck.title) ? currentDeck.title : originalTitle;
+      function restoreTitle(){
+        document.title = originalTitle;
+        window.removeEventListener('afterprint', restoreTitle);
+      }
+      window.addEventListener('afterprint', restoreTitle);
+      window.print();
+    });
   }
 
   // ---------- Generate: Flashcards ----------
