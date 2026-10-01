@@ -220,7 +220,6 @@
     color:var(--ink-soft);
   }
   .flash-toolbar-actions{display:flex;align-items:center;gap:4px;}
-  .import-row{margin-top:22px;}
   .flash-progress-track{
     height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:26px;
   }
@@ -469,10 +468,6 @@
         </label>
         <input id="fileInput" type="file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden />
         <p class="file-types-note">Works with PDF and PowerPoint (.pptx) files.</p>
-        <div class="import-row">
-          <button id="importCardsBtn" class="btn btn-ghost">Import shared flashcards</button>
-        </div>
-        <input id="importFileInput" type="file" accept=".json,application/json" hidden />
       </div>
     </section>
 
@@ -641,8 +636,6 @@
     saveKeyBtn: document.getElementById('saveKeyBtn'),
     clearKeyBtn: document.getElementById('clearKeyBtn'),
     keyStatus: document.getElementById('keyStatus'),
-    importCardsBtn: document.getElementById('importCardsBtn'),
-    importFileInput: document.getElementById('importFileInput'),
     incomingModal: document.getElementById('incomingModal'),
     incomingSummary: document.getElementById('incomingSummary'),
     incomingAddBtn: document.getElementById('incomingAddBtn'),
@@ -1487,7 +1480,6 @@
 
     var html = '<div class="flash-toolbar"><span>Card ' + (flashState.pos + 1) + ' of ' + order.length + '</span>' +
       '<span class="flash-toolbar-actions"><button id="shareLinkBtn" class="btn-text">Share link</button>' +
-      '<button id="shareFileBtn" class="btn-text">Share file</button>' +
       '<button id="shuffleBtn" class="btn-text">Shuffle</button></span></div>' +
       '<div class="flash-progress-track"><div class="flash-progress-fill" style="width:' + progressPct + '%"></div></div>' +
       '<div class="flashcard-stage"><div class="flashcard' + (flashState.flipped ? ' flipped' : '') + '" id="flashcardEl">' +
@@ -1518,7 +1510,6 @@
     prepareShareLink(); // build the link in the background so the tap below can share instantly
     var shareLinkBtn = document.getElementById('shareLinkBtn');
     shareLinkBtn.addEventListener('click', function(){ shareLink(shareLinkBtn); });
-    document.getElementById('shareFileBtn').addEventListener('click', shareCards);
 
     document.getElementById('shuffleBtn').addEventListener('click', function(){
       var arr = order.slice();
@@ -1591,52 +1582,10 @@
     }
   });
 
-  // ---------- Share / import flashcards (file-based) ----------
-  // Only the front/back text and a title are exported — never the extracted lecture text,
-  // the original file, or the API key. Bump CARDS_FORMAT_VERSION if the shape ever changes.
-  var CARDS_FORMAT = 'studydeck-cards';
-  var CARDS_FORMAT_VERSION = 1;
+  // ---------- Importing a shared deck ----------
   var MAX_IMPORT_CARDS = 500;
 
-  function safeFileName(s){
-    var cleaned = String(s || 'flashcards').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
-    return (cleaned || 'flashcards').slice(0, 80);
-  }
-
-  function downloadBlobFile(file){
-    var url = URL.createObjectURL(file);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
-  }
-
-  // Must stay synchronous up to navigator.share() so the browser still counts it as a user gesture.
-  function shareCards(){
-    if (!currentDeck || !currentDeck.flashcards || !currentDeck.flashcards.length) return;
-    var payload = {
-      format: CARDS_FORMAT,
-      version: CARDS_FORMAT_VERSION,
-      title: currentDeck.title,
-      exportedAt: new Date().toISOString(),
-      cards: currentDeck.flashcards.map(function(c){ return { front: c.front, back: c.back }; })
-    };
-    var file = new File([JSON.stringify(payload, null, 2)], safeFileName(currentDeck.title) + ' flashcards.json', { type: 'application/json' });
-
-    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })){
-      navigator.share({ files: [file], title: currentDeck.title })['catch'](function(err){
-        if (err && err.name === 'AbortError') return; // user closed the share sheet
-        downloadBlobFile(file);
-      });
-    } else {
-      downloadBlobFile(file);
-    }
-  }
-
-  // Shared helpers for both import paths (file and link).
+  // Helpers used when a share link is opened.
   function cleanCards(raw){
     return (Array.isArray(raw) ? raw : []).filter(function(c){
       return c && typeof c.front === 'string' && typeof c.back === 'string' && c.front.trim() && c.back.trim();
@@ -1670,32 +1619,6 @@
     return saveDeck(deck).then(function(){
       currentDeck = deck;
       openWorkspace();
-    });
-  }
-
-  function importCardsFromFile(file){
-    if (!file) return;
-    hideError();
-    showLoading('Importing cards…');
-    file.text().then(function(txt){
-      var data;
-      try { data = JSON.parse(txt); } catch(e){ throw new Error('IMPORT_NOT_JSON'); }
-      if (!data || data.format !== CARDS_FORMAT) throw new Error('IMPORT_WRONG_FORMAT');
-      if (typeof data.version !== 'number' || data.version > CARDS_FORMAT_VERSION) throw new Error('IMPORT_TOO_NEW');
-      var cards = cleanCards(data.cards);
-      if (!cards.length) throw new Error('IMPORT_NO_CARDS');
-      var title = resolveTitle(data.title, (file.name || 'Imported cards').replace(/\.json$/i, ''));
-      var deck = createDeckFromCards(title, file.name || 'imported-flashcards.json', cards);
-      return saveAndOpenImported(deck).then(hideLoading);
-    })['catch'](function(err){
-      hideLoading();
-      console.error(err);
-      var m = err && err.message;
-      if (m === 'IMPORT_NOT_JSON') showError("That file isn't readable as shared flashcards. Make sure it's the .json file that was sent to you.");
-      else if (m === 'IMPORT_WRONG_FORMAT') showError("That file isn't a Study Deck flashcard export.");
-      else if (m === 'IMPORT_TOO_NEW') showError("That file was made with a newer version of Study Deck. Update the app and try again.");
-      else if (m === 'IMPORT_NO_CARDS') showError("That file doesn't contain any usable flashcards.");
-      else showError("Couldn't import that file. Try again.");
     });
   }
 
@@ -1811,28 +1734,31 @@
     btn.textContent = text;
     setTimeout(function(){ btn.textContent = original; }, 2000);
   }
-  function copyLink(url, btn){
+  function copyLink(url, title, btn){
+    var message = 'Flashcards: ' + title + '\n' + url;
     if (navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(url).then(function(){
+      navigator.clipboard.writeText(message).then(function(){
         flashButtonLabel(btn, 'Link copied');
       }, function(){
-        window.prompt('Copy this link:', url);
+        window.prompt('Copy this message:', message);
       });
     } else {
-      window.prompt('Copy this link:', url);
+      window.prompt('Copy this message:', message);
     }
   }
   function deliverLink(url, title, btn){
     if (navigator.share){
-      navigator.share({ title: title, url: url })['catch'](function(err){
+      // The link preview card always says "Study Deck Flashcards" (it's built from the page's
+      // static title), so the deck name goes in the message text above the link.
+      navigator.share({ title: title, text: 'Flashcards: ' + title, url: url })['catch'](function(err){
         if (err && err.name === 'AbortError') return; // user closed the share sheet
-        copyLink(url, btn);
+        copyLink(url, title, btn);
       });
     } else {
-      copyLink(url, btn);
+      copyLink(url, title, btn);
     }
     if (url.length > LONG_LINK_CHARS){
-      showError("This deck makes a long link. If it doesn't open for the person you sent it to, use Share file instead.");
+      showError("This deck makes a long link. If it doesn't open for the person you sent it to, try a deck with fewer cards.");
     }
   }
   function shareLink(btn){
@@ -1849,7 +1775,7 @@
       entry.promise.then(function(url){
         deliverLink(url, entry.title, btn);
       })['catch'](function(){
-        showError("Couldn't build the share link. Try Share file instead.");
+        showError("Couldn't build the share link. Try again.");
       });
     }
   }
@@ -1876,9 +1802,9 @@
       console.error(err);
       var m = err && err.message;
       if (m === 'LINK_TOO_NEW') showError('That link was made with a newer version of Study Deck. Reload the app and open it again.');
-      else if (m === 'LINK_NO_SUPPORT') showError("This browser can't open compressed share links. Ask for the Share file version instead.");
+      else if (m === 'LINK_NO_SUPPORT') showError("This browser can't open compressed share links. Try an up-to-date Safari or Chrome.");
       else if (m === 'LINK_NO_CARDS') showError("That link doesn't contain any usable flashcards.");
-      else showError("That share link looks incomplete or damaged. Ask for it to be sent again, or use Share file.");
+      else showError("That share link looks incomplete or damaged. Ask for it to be sent again.");
     });
   }
   function closeIncoming(){ el.incomingModal.hidden = true; incomingPending = null; }
@@ -1890,12 +1816,6 @@
     closeIncoming();
     hideError();
     saveAndOpenImported(createDeckFromCards(pending.title, 'Shared link', pending.cards));
-  });
-
-  el.importCardsBtn.addEventListener('click', function(){ el.importFileInput.click(); });
-  el.importFileInput.addEventListener('change', function(){
-    if (el.importFileInput.files && el.importFileInput.files[0]) importCardsFromFile(el.importFileInput.files[0]);
-    el.importFileInput.value = '';
   });
 
   // ---------- Tabs ----------
