@@ -1706,6 +1706,7 @@
   // title + card text only.
   var SHARE_LINK_VERSION = 1;
   var LINK_PARAM = 'share=';
+  var VIEWER_PAGE = 'study-deck-viewer.html'; // recipients' flashcard-only page; lives in the same folder as this file
   var MAX_LINK_BYTES = 2000000;   // cap on decompressed size, guards against a malicious link
   var LONG_LINK_CHARS = 8000;
   var shareLinkCache = null;      // { cards, title, url, promise }
@@ -1797,7 +1798,7 @@
     if (shareLinkCache && shareLinkCache.cards === cards && shareLinkCache.title === currentDeck.title) return shareLinkCache;
     var entry = { cards: cards, title: currentDeck.title, url: null, promise: null };
     entry.promise = encodeSharePayload(currentDeck.title, cards).then(function(param){
-      entry.url = location.origin + location.pathname + '#' + LINK_PARAM + param;
+      entry.url = new URL(VIEWER_PAGE, location.href).href + '#' + LINK_PARAM + param;
       return entry.url;
     });
     entry.promise['catch'](function(e){ console.error('share link build failed', e); });
