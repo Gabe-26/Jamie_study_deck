@@ -305,7 +305,7 @@
       console.error(err);
       var m = err && err.message;
       if (m === 'LINK_TOO_NEW') showMessage('This link needs a newer version', 'Reload this page and open the link again. If that doesn\u2019t help, ask for a fresh link.');
-      else if (m === 'LINK_NO_SUPPORT') showMessage('This browser can\u2019t open the link', 'Try opening it in an up-to-date Safari or Chrome, or ask for the flashcards as a file instead.');
+      else if (m === 'LINK_NO_SUPPORT') showMessage('This browser can\u2019t open the link', 'Try opening it in an up-to-date Safari or Chrome.');
       else if (m === 'LINK_NO_CARDS') showMessage('No flashcards found', 'That link didn\u2019t contain any usable cards. Ask for it to be sent again.');
       else showMessage('That link looks incomplete', 'Part of it may have been cut off when it was sent. Ask for it to be sent again.');
     });
