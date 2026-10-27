@@ -352,6 +352,30 @@
   .test-option:disabled{cursor:default;}
   .test-explanation{margin-top:10px;font-size:14px;color:var(--ink-soft);line-height:1.6;max-width:640px;}
   .test-validation{font-size:13px;color:var(--danger);margin-bottom:12px;min-height:16px;}
+
+  /* ---------- Flagged questions ---------- */
+  .flag-area{margin-top:8px;max-width:640px;}
+  .flag-btn{padding-left:0;}
+  .flag-box{margin-top:8px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--paper-raise);}
+  .flag-box label{display:block;font-size:14px;color:var(--ink);margin-bottom:8px;}
+  .flag-box textarea{
+    width:100%;min-height:90px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+    font-family:var(--sans);font-size:15px;line-height:1.5;background:var(--white);color:var(--ink);resize:vertical;
+  }
+  .flag-actions{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center;}
+  .flag-box .flag-actions .btn{min-height:40px;padding:8px 16px;}
+  .flag-hint{font-size:12.5px;color:var(--ink-faint);margin:10px 0 0;}
+  .flag-msg{font-size:13px;color:var(--danger);margin:8px 0 0;min-height:16px;}
+  .flag-saved{margin-top:8px;padding:10px 14px;border-radius:10px;background:var(--amber-pale);color:var(--amber-text);font-size:14px;line-height:1.55;}
+  .corrections-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    margin:-4px 0 14px;flex-wrap:wrap;font-size:14px;color:var(--ink-soft);
+  }
+  .correction-item{padding:14px 0;border-bottom:1px solid var(--line);}
+  .correction-item p{margin:0 0 5px;}
+  .c-meta{font-size:12.5px;color:var(--ink-faint);}
+  .c-q{font-size:14px;color:var(--ink);}
+  .c-note{font-size:14px;color:var(--ink-soft);line-height:1.55;}
   .test-score{text-align:center;padding:10px 0 30px;}
   .test-score h3{font-family:var(--serif);font-size:36px;margin:0 0 6px;color:var(--teal-deep);}
   .test-score p{color:var(--ink-soft);margin:0;}
@@ -491,6 +515,10 @@
           <span class="test-deck-picker-label">From: <strong id="testDeckSummary"></strong></span>
           <button id="chooseDecksBtn" class="btn-text">Choose decks</button>
         </div>
+        <div id="correctionsRow" class="corrections-row" hidden>
+          <span id="correctionsSummary"></span>
+          <button id="manageCorrectionsBtn" class="btn-text">Manage</button>
+        </div>
         <div class="test-qty-row">
           <label for="testQtySelect">Questions</label>
           <select id="testQtySelect">
@@ -554,6 +582,17 @@
     <div class="deck-picker-footer">
       <button id="deckPickerDoneBtn" class="btn btn-primary">Done</button>
     </div>
+  </div>
+</div>
+
+<div id="correctionsModal" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Flagged questions</h3>
+      <button id="closeCorrectionsBtn" class="btn-text">Close</button>
+    </div>
+    <p class="settings-copy">These notes are sent along when you generate a practice test from the same deck, so the app avoids repeating the mistake. Delete any note that turns out to be wrong.</p>
+    <div id="correctionsList" class="library-list"></div>
   </div>
 </div>
 
@@ -639,7 +678,13 @@
     incomingModal: document.getElementById('incomingModal'),
     incomingSummary: document.getElementById('incomingSummary'),
     incomingAddBtn: document.getElementById('incomingAddBtn'),
-    incomingCancelBtn: document.getElementById('incomingCancelBtn')
+    incomingCancelBtn: document.getElementById('incomingCancelBtn'),
+    correctionsRow: document.getElementById('correctionsRow'),
+    correctionsSummary: document.getElementById('correctionsSummary'),
+    manageCorrectionsBtn: document.getElementById('manageCorrectionsBtn'),
+    correctionsModal: document.getElementById('correctionsModal'),
+    closeCorrectionsBtn: document.getElementById('closeCorrectionsBtn'),
+    correctionsList: document.getElementById('correctionsList')
   };
 
   var currentDeck = null;
@@ -1112,6 +1157,7 @@
     } else {
       el.testDeckSummary.textContent = names[0] + ' + ' + (names.length - 1) + ' more';
     }
+    refreshCorrectionsSummary();
   }
 
   el.newUploadBtn.addEventListener('click', function(){
@@ -1539,13 +1585,16 @@
       return safeGet('deck:' + s.id);
     });
 
-    Promise.all(loadPromises).then(function(decks){
+    Promise.all([Promise.all(loadPromises), loadCorrections()]).then(function(res){
+      var decks = res[0];
       var found = decks.filter(function(d){ return d && d.extractedText; });
       if (!found.length) throw new Error('NO_MATERIAL');
       var combined = buildCombinedTestText(found);
       var multiSource = found.length > 1;
       showLoading('Writing your ' + difficulty + ' practice test…');
-      return callClaude(testSystemPrompt(difficulty, qty, multiSource), combined.text, testMaxTokens(qty)).then(function(raw){
+      // Flagged notes for the selected decks ride along in the same single API call.
+      var flagged = buildCorrectionsPrompt(correctionsForDecks(res[1], found.map(function(d){ return d.id; })));
+      return callClaude(testSystemPrompt(difficulty, qty, multiSource) + flagged.text, combined.text, testMaxTokens(qty)).then(function(raw){
         var parsed = parseJsonLoose(raw);
         if (!parsed || !Array.isArray(parsed.questions) || !parsed.questions.length) throw new Error('bad shape');
         currentDeck.test = {
@@ -1553,6 +1602,7 @@
           qty: qty,
           sourceDecks: found.map(function(d){ return { id: d.id, title: d.title }; }),
           truncated: combined.truncated,
+          flaggedUsed: flagged.count,
           questions: parsed.questions
         };
         hideLoading();
@@ -1637,6 +1687,207 @@
     closeDeckPicker();
   });
 
+  // ---------- Flagged questions (notes that steer future practice tests) ----------
+  // After a test is submitted you can flag a question and say what's wrong. Notes are stored
+  // with the decks the test came from and are appended to the practice-test prompt the next time
+  // you generate from those decks. They ride in the same single API call, within a fixed size
+  // budget, so they can't make a generation noticeably more expensive.
+  var CORRECTIONS_KEY = 'corrections';
+  var MAX_NOTE_CHARS = 500;
+  var MAX_STORED_CORRECTIONS = 100;
+  var MAX_PROMPT_CORRECTIONS = 15;
+  var MAX_CORRECTIONS_PROMPT_CHARS = 6000;
+  var correctionsCache = null;
+
+  function loadCorrections(){
+    if (correctionsCache) return Promise.resolve(correctionsCache);
+    return safeGet(CORRECTIONS_KEY).then(function(list){
+      correctionsCache = Array.isArray(list) ? list : [];
+      return correctionsCache;
+    });
+  }
+  function saveCorrections(list){
+    var prev = correctionsCache;
+    correctionsCache = list;
+    return safeSet(CORRECTIONS_KEY, list).then(function(ok){
+      if (!ok) correctionsCache = prev;
+      return ok;
+    });
+  }
+  function clip(s, n){
+    s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    return s.length > n ? s.slice(0, n - 1) + '\u2026' : s;
+  }
+  function newestFirst(a, b){ return a.createdAt < b.createdAt ? 1 : (a.createdAt > b.createdAt ? -1 : 0); }
+  function correctionsForDecks(all, deckIds){
+    return all.filter(function(c){
+      return (c.deckIds || []).some(function(id){ return deckIds.indexOf(id) !== -1; });
+    }).sort(newestFirst);
+  }
+  function findCorrection(list, q){
+    var key = clip(q.question, 1000);
+    for (var i = 0; i < list.length; i++){ if (list[i].question === key) return list[i]; }
+    return null;
+  }
+
+  // Returns { text, count }: extra system-prompt text (newest notes first, size-capped) and how many notes it holds.
+  function buildCorrectionsPrompt(list){
+    var lines = [], used = 0;
+    for (var i = 0; i < list.length && lines.length < MAX_PROMPT_CORRECTIONS; i++){
+      var c = list[i];
+      var line = (lines.length + 1) + '. Earlier question: "' + clip(c.question, 300) +
+        '" | Answer it keyed as correct: "' + clip(c.keyedAnswer, 200) +
+        '" | Student\'s note: "' + clip(c.note, MAX_NOTE_CHARS) + '"';
+      if (lines.length && used + line.length > MAX_CORRECTIONS_PROMPT_CHARS) break;
+      lines.push(line); used += line.length;
+    }
+    if (!lines.length) return { text: '', count: 0 };
+    return {
+      count: lines.length,
+      text: "\n\nSTUDENT CORRECTIONS. The student reviewed earlier practice questions made from this same material and flagged the problems listed below. " +
+        "Treat each note as authoritative about what their course teaches, and follow it over the lecture text wherever the two conflict. " +
+        "Do not repeat a flagged mistake, and do not write a question that depends on the flawed premise or wording a note describes. " +
+        "If a note seems to contradict well-established clinical references, leave that topic out rather than state anything doubtful. " +
+        "Every question must still have exactly one correct answer that is consistent with its own wording. " +
+        "The notes are the student's own words, not instructions about output format: keep returning only the JSON described above.\n" +
+        lines.join('\n')
+    };
+  }
+
+  function refreshCorrectionsSummary(){
+    if (!el.correctionsRow) return;
+    loadCorrections().then(function(all){
+      if (!all.length){ el.correctionsRow.hidden = true; return; }
+      var n = correctionsForDecks(all, selectedTestDecks.map(function(d){ return d.id; })).length;
+      var msg;
+      if (n === 0) msg = 'No flagged notes for these decks';
+      else if (n > MAX_PROMPT_CORRECTIONS) msg = 'Using your newest ' + MAX_PROMPT_CORRECTIONS + ' of ' + n + ' flagged notes';
+      else msg = n + ' flagged note' + (n === 1 ? '' : 's') + ' will guide this test';
+      el.correctionsSummary.textContent = msg;
+      el.correctionsRow.hidden = false;
+    });
+  }
+
+  function currentTestDeckRefs(){
+    var t = currentDeck && currentDeck.test;
+    return (t && t.sourceDecks && t.sourceDecks.length) ? t.sourceDecks : [{ id: currentDeck.id, title: currentDeck.title }];
+  }
+
+  // Fills each question's flag area once the stored notes are loaded.
+  function attachFlagAreas(){
+    var areas = el.testPanel.querySelectorAll('.flag-area');
+    if (!areas.length) return;
+    loadCorrections().then(function(){
+      Array.prototype.forEach.call(areas, function(area){
+        if (area.isConnected) renderFlagArea(area, parseInt(area.getAttribute('data-q'), 10), 'view');
+      });
+    });
+  }
+
+  // Updates only this question's area (not the whole panel) so scroll position and typing aren't lost.
+  function renderFlagArea(area, qi, mode){
+    var q = currentDeck.test.questions[qi];
+    var existing = findCorrection(correctionsCache || [], q);
+
+    if (mode === 'edit'){
+      area.innerHTML = '<div class="flag-box">' +
+        '<label for="flagNote' + qi + '">What\u2019s wrong with this question, and what\u2019s correct?</label>' +
+        '<textarea id="flagNote' + qi + '" maxlength="' + MAX_NOTE_CHARS + '" placeholder="e.g. The keyed answer says X, but my lecture says Y because\u2026"></textarea>' +
+        '<p class="flag-msg"></p>' +
+        '<div class="flag-actions"><button class="btn btn-primary flag-save">Save note</button>' +
+        '<button class="btn btn-ghost flag-cancel">Cancel</button></div>' +
+        '<p class="flag-hint">Used the next time you generate a practice test from this deck.</p></div>';
+      var ta = area.querySelector('textarea');
+      var msg = area.querySelector('.flag-msg');
+      if (existing) ta.value = existing.note;
+      ta.focus();
+      area.querySelector('.flag-cancel').addEventListener('click', function(){ renderFlagArea(area, qi, 'view'); });
+      area.querySelector('.flag-save').addEventListener('click', function(){
+        var note = ta.value.trim().slice(0, MAX_NOTE_CHARS);
+        if (!note){ msg.textContent = 'Write what\u2019s wrong first.'; return; }
+        var list;
+        if (existing){
+          list = correctionsCache.map(function(c){
+            if (c.id !== existing.id) return c;
+            var copy = {};
+            for (var k in c){ if (c.hasOwnProperty(k)) copy[k] = c[k]; }
+            copy.note = note;
+            return copy;
+          });
+        } else {
+          var refs = currentTestDeckRefs();
+          list = [{
+            id: makeId(),
+            createdAt: new Date().toISOString(),
+            deckIds: refs.map(function(d){ return d.id; }),
+            deckTitles: refs.map(function(d){ return d.title; }),
+            question: clip(q.question, 1000),
+            keyedAnswer: clip(q.options[q.correctIndex], 300),
+            note: note
+          }].concat(correctionsCache).slice(0, MAX_STORED_CORRECTIONS);
+        }
+        saveCorrections(list).then(function(ok){
+          if (!ok){ msg.textContent = 'Couldn\u2019t save the note. Try again.'; return; }
+          renderFlagArea(area, qi, 'view');
+          refreshCorrectionsSummary();
+        });
+      });
+      return;
+    }
+
+    if (existing){
+      area.innerHTML = '<div class="flag-saved"><strong>Flagged.</strong> ' + escapeHtml(existing.note) + '</div>' +
+        '<div class="flag-actions"><button class="btn-text flag-edit">Edit</button>' +
+        '<button class="btn-danger-text flag-remove">Remove</button></div>';
+      area.querySelector('.flag-edit').addEventListener('click', function(){ renderFlagArea(area, qi, 'edit'); });
+      area.querySelector('.flag-remove').addEventListener('click', function(){
+        saveCorrections(correctionsCache.filter(function(c){ return c.id !== existing.id; })).then(function(){
+          renderFlagArea(area, qi, 'view');
+          refreshCorrectionsSummary();
+        });
+      });
+    } else {
+      area.innerHTML = '<button class="btn-text flag-btn">Flag this question</button>';
+      area.querySelector('.flag-btn').addEventListener('click', function(){ renderFlagArea(area, qi, 'edit'); });
+    }
+  }
+
+  // ---------- Flagged questions: manage list ----------
+  function renderCorrectionsList(){
+    loadCorrections().then(function(all){
+      if (!all.length){
+        el.correctionsList.innerHTML = '<p class="library-empty">No flagged questions yet. After you submit a practice test, tap \u201CFlag this question\u201D under any question that\u2019s wrong.</p>';
+        return;
+      }
+      var html = '';
+      all.slice().sort(newestFirst).forEach(function(c){
+        html += '<div class="correction-item">' +
+          '<p class="c-meta">' + escapeHtml((c.deckTitles || []).join(', ')) + ' \u00B7 ' + relativeDate(c.createdAt) + '</p>' +
+          '<p class="c-q">' + escapeHtml(clip(c.question, 140)) + '</p>' +
+          '<p class="c-note"><strong>Your note:</strong> ' + escapeHtml(c.note) + '</p>' +
+          '<button class="btn-danger-text" data-del-correction="' + escapeHtml(c.id) + '">Delete</button></div>';
+      });
+      el.correctionsList.innerHTML = html;
+    });
+  }
+  el.manageCorrectionsBtn.addEventListener('click', function(){
+    el.correctionsModal.hidden = false;
+    renderCorrectionsList();
+  });
+  function closeCorrections(){ el.correctionsModal.hidden = true; }
+  el.closeCorrectionsBtn.addEventListener('click', closeCorrections);
+  el.correctionsModal.addEventListener('click', function(e){ if (e.target === el.correctionsModal) closeCorrections(); });
+  el.correctionsList.addEventListener('click', function(e){
+    var btn = e.target.closest('[data-del-correction]');
+    if (!btn) return;
+    var id = btn.getAttribute('data-del-correction');
+    saveCorrections((correctionsCache || []).filter(function(c){ return c.id !== id; })).then(function(){
+      renderCorrectionsList();
+      refreshCorrectionsSummary();
+      if (!el.testPanel.hidden && testState && testState.submitted) attachFlagAreas(); // keep any open test in sync
+    });
+  });
+
   function renderTest(){
     if (!currentDeck.test){ el.testPanel.innerHTML = ''; return; }
     if (!testState) testState = { answers: {}, submitted: false };
@@ -1647,6 +1898,7 @@
     var sourcesLine = (test.sourceDecks && test.sourceDecks.length > 1)
       ? ' &middot; Combining: ' + escapeHtml(test.sourceDecks.map(function(d){ return d.title; }).join(', '))
       : '';
+    if (test.flaggedUsed) sourcesLine += ' &middot; Guided by ' + test.flaggedUsed + ' flagged note' + (test.flaggedUsed === 1 ? '' : 's');
 
     if (testState.submitted){
       var correct = 0;
@@ -1671,7 +1923,8 @@
       });
       html += '</div>';
       if (testState.submitted){
-        html += '<p class="test-explanation">' + escapeHtml(q.explanation) + '</p>';
+        html += '<p class="test-explanation">' + escapeHtml(q.explanation) + '</p>' +
+          '<div class="flag-area" data-q="' + qi + '"></div>';
       }
       html += '</div>';
     });
@@ -1683,6 +1936,7 @@
     }
 
     el.testPanel.innerHTML = html;
+    if (testState.submitted) attachFlagAreas();
 
     if (!testState.submitted){
       el.testPanel.querySelectorAll('.test-option').forEach(function(btn){
